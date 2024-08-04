@@ -39,11 +39,12 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-     'corsheaders',
+    'corsheaders',
     'rest_framework',
-     'rest_framework_simplejwt.token_blacklist',
+    'rest_framework_simplejwt.token_blacklist',
     'rest_framework_simplejwt',
     'users',
+    'pedidos',
 
 ]
 
@@ -89,11 +90,13 @@ DATABASES = {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'postgres',
         'USER': 'postgres',
-        'PASSWORD': 'Cristian18CG-24',
+        #'PASSWORD': 'Cristian18CG-24',
+        'PASSWORD': 'Felipe-18cg',
         'HOST': 'localhost',
         'PORT': '5432',
     }
 }
+DATABASES['default']['OPTIONS'] = {'options': '-c search_path=public,pedidos'}
 
 # Password validation
 # https://docs.djangoproject.com/en/4.2/ref/settings/#auth-password-validators
