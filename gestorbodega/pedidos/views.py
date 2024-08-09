@@ -6,6 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework import status
+from .serializers import Entregadores_Serializer
 
 from .models import Entregador, Registros_Pedidos
 import os
@@ -51,3 +52,17 @@ class PedidosViews(viewsets.ModelViewSet):
                 
         else:
             return JsonResponse({'error': 'Método no permitido'}, status=405)
+        
+    @action(detail=False, methods=['GET']) # obtener los registos necesarios de las notificaciones
+    def lista_entregadores(self, request):
+        try:
+            queryset = Entregador.objects.all()
+            serializer = Entregadores_Serializer(queryset, many=True)
+            return Response(serializer.data)
+        except Exception as e:
+             print("Error obteniendo el log", str(e))
+             return Response({'error': f'Se produjo un error al obtener los registros de contrato activo {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+        
