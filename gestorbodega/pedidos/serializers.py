@@ -16,8 +16,5 @@ class PedidoSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Pedido
-        fields = [
-            'id', 'documento', 'nombre_entregador', 'numero_ruta',
-            'valor_pedido', 'numero_factura', 'tipo_pedido', 'acompanado',
-            'acompanante', 'fecha', 'valor_transferencia', 'completado', 'usuario'
-        ]
+        fields = "__all__"
+                       
