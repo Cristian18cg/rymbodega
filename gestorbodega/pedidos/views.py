@@ -88,7 +88,16 @@ class PedidosViews(viewsets.ModelViewSet):
 
                 created_pedidos = []
                 fecha_actual = datetime.now()
-
+                   # Verificar si ya existe un pedido con el mismo número de ruta y entregador para la fecha actual
+                for pedido in pedidos_data:
+                 numero_ruta = pedido.get('numeroRuta', '')
+                 
+                 if Pedido.objects.filter(
+                    documento__documento=documento,
+                    numero_ruta=numero_ruta,
+                    fecha__date=fecha_actual
+                ).exists():
+                    return Response({'error': 'El número de ruta ya está asignado para hoy para este entregador'}, status=status.HTTP_400_BAD_REQUEST)
                 # Crear los pedidos uno a uno
                 for pedido in pedidos_data:
                     if not isinstance(pedido, dict):
@@ -164,12 +173,14 @@ class PedidosViews(viewsets.ModelViewSet):
 
             for entregador in entregadores:
                 stats = next((e for e in entregadores_con_pedidos if e['documento'] == entregador.documento), None)
+                
                 data.append({
                     'documento':entregador.documento,
                     'entregador': f"{entregador.nombres} {entregador.apellidos}",
                     'completados': stats['completados'],
                     'no_completados': stats['no_completados'],
                     'total_rutas': stats['total_rutas'],  # Añadir el total de rutas
+
                 })
 
             return Response(data)
@@ -186,3 +197,57 @@ class PedidosViews(viewsets.ModelViewSet):
         except Exception as e:
              print("Error obteniendo el log", str(e))
              return Response({'error': f'Se produjo un error al obtener los registros de contrato activo {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    @action(detail=False, methods=['GET'])
+    def pedidos_por_entregador(self, request):
+        try:
+            # Obtener el documento del entregador desde los parámetros de la solicitud
+            documento = request.query_params.get('documento', None)
+            if not documento:
+                return Response({'error': 'El parámetro "documento" es requerido'}, status=status.HTTP_400_BAD_REQUEST)
+    
+            # Verificar si el entregador existe
+            entregador = Entregador.objects.filter(documento=documento).first()
+            if not entregador:
+                return Response({'error': 'Entregador no encontrado'}, status=status.HTTP_404_NOT_FOUND)
+    
+            # Obtiene la fecha de hoy
+            hoy = datetime.now().date()
+    
+            # Filtra los pedidos del día de hoy para el entregador y los agrupa por número de ruta
+            pedidos = Pedido.objects.filter(documento=entregador, fecha__date=hoy).order_by('numero_ruta')
+            rutas_agrupadas = {}
+    
+            for pedido in pedidos:
+                ruta = pedido.numero_ruta
+                if ruta not in rutas_agrupadas:
+                    rutas_agrupadas[ruta] = []
+                rutas_agrupadas[ruta].append({
+                    'id': pedido.id,
+                    'nombre_entregador': pedido.nombre_entregador,
+                    'numero_ruta': ruta,
+                    'valor_pedido': pedido.valor_pedido,
+                    'numero_factura': pedido.numero_factura,
+                    'tipo_pedido': pedido.tipo_pedido,
+                    'tipo_vehiculo': pedido.tipo_vehiculo,
+                    'acompanado': pedido.acompanado,
+                    'acompanante': pedido.acompanante,
+                    'fecha': pedido.fecha,
+                    'valor_transferencia': pedido.valor_transferencia,
+                    'devolucion': pedido.devolucion,
+                    'completado': pedido.completado,
+                    'creador': pedido.creador
+                })
+    
+            # Construir la respuesta agrupada por número de ruta
+            data = []
+            for ruta, pedidos_lista in rutas_agrupadas.items():
+                data.append({
+                    'numero_ruta': ruta,
+                    'pedidos': pedidos_lista
+                })
+    
+            return Response(data)
+        except Exception as e:
+            print("Error obteniendo los pedidos", str(e))
+            return Response({'error': f'Se produjo un error al obtener los pedidos: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
