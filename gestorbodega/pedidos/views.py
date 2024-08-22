@@ -251,3 +251,46 @@ class PedidosViews(viewsets.ModelViewSet):
         except Exception as e:
             print("Error obteniendo los pedidos", str(e))
             return Response({'error': f'Se produjo un error al obtener los pedidos: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+         
+    @action(detail=False, methods=['PUT'])
+    def actualizar_pedido(self, request):
+        try:
+            print("entreo")
+            # Extraer los datos del request
+            id_pedido = request.data.get('id')
+            campo = request.data.get('campo')
+            nuevo_dato = request.data.get('dato')
+            usuario = request.data.get('usuario')
+            documento = request.data.get('documento')
+
+            # Validar que se hayan proporcionado todos los datos necesarios
+            if not id_pedido or not campo or not nuevo_dato:
+                return Response({'error': 'ID del pedido, campo y dato son requeridos.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Obtener el pedido a actualizar
+            pedido = Pedido.objects.filter(id=id_pedido).first()
+            if not pedido:
+                return Response({'error': 'Pedido no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+
+            # Obtener el dato antiguo antes de actualizar
+            dato_viejo = getattr(pedido, campo)
+
+            # Actualizar el campo dinámicamente
+            setattr(pedido, campo, nuevo_dato)
+            pedido.save()
+
+            # Crear el registro solo si la actualización fue exitosa
+            entregador = Entregador.objects.filter(documento=documento).first()
+            if entregador:
+                Registros_Pedidos.objects.create(
+                    documento=entregador,
+                    nombre_responsable=usuario,
+                    tipo_registro='Actualizacion',
+                    descripcion_registro=f'Se actualizó {campo}: dato viejo "{dato_viejo}", nuevo dato "{nuevo_dato}"'
+                )
+
+            return Response({'success': f'{campo} actualizado correctamente.'}, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            print("Error actualizando el pedido", str(e))
+            return Response({'error': f'Se produjo un error al actualizar el pedido: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
