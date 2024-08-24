@@ -255,14 +255,17 @@ class PedidosViews(viewsets.ModelViewSet):
     @action(detail=False, methods=['PUT'])
     def actualizar_pedido(self, request):
         try:
-            print("entreo")
             # Extraer los datos del request
             id_pedido = request.data.get('id')
             campo = request.data.get('campo')
             nuevo_dato = request.data.get('dato')
             usuario = request.data.get('usuario')
             documento = request.data.get('documento')
-
+            if nuevo_dato ==False:
+                nuevo_dato='False'
+            print(id_pedido)
+            print(nuevo_dato)
+            print(campo)
             # Validar que se hayan proporcionado todos los datos necesarios
             if not id_pedido or not campo or not nuevo_dato:
                 return Response({'error': 'ID del pedido, campo y dato son requeridos.'}, status=status.HTTP_400_BAD_REQUEST)

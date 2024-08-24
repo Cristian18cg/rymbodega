@@ -25,10 +25,7 @@ SECRET_KEY = 'django-insecure-p(p_u+^l-z+2&^a29hm*vw3qdgy-9c82w#02u_i5l+feci5n)1
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = [
-    "*"
-]
-
+ALLOWED_HOSTS = ['192.168.0.105', 'localhost', '127.0.0.1']
 
 # Application definition
 
@@ -90,8 +87,8 @@ DATABASES = {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'postgres',
         'USER': 'postgres',
-        'PASSWORD': 'Cristian18CG-24',
-        #'PASSWORD': 'Felipe-18cg',
+        #'PASSWORD': 'Cristian18CG-24',
+        'PASSWORD': 'Felipe-18cg',
         'HOST': 'localhost',
         'PORT': '5432',
     }
@@ -144,6 +141,7 @@ CORS_ALLOW_ALL_ORIGINS = True
 
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:3000',
+    'http://192.168.0.105:3000'
     
 ]
 CORS_ALLOW_HEADERS = [
