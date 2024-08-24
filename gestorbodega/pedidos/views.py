@@ -8,7 +8,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from datetime import datetime, timedelta, date
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Count, Q,Sum
 from .serializers import Entregadores_Serializer, PedidoSerializer
 import json
 
@@ -138,21 +138,39 @@ class PedidosViews(viewsets.ModelViewSet):
         return JsonResponse({'error': 'Método no permitido'}, status=405)
 
    
-    @action(detail=True, methods=['DELETE'])
-    def eliminar_pedido(self, request, pk=None):
+    @action(detail=False, methods=['DELETE'])
+    def eliminar_pedido(self, request):
+        id_pedido = request.data.get('id')
+        usuario = request.data.get('usuario')
+        documento = request.data.get('documento')
+    
+        if not id_pedido or not usuario or not documento:
+            return Response({'error': 'ID del pedido, usuario y documento son requeridos.'}, status=status.HTTP_400_BAD_REQUEST)
+    
         try:
-            # Buscar el pedido por ID (pk)
-            pedido = Pedido.objects.get(pk=pk)
-
+            # Buscar el pedido por ID
+            pedido = Pedido.objects.filter(id=id_pedido).first()
+    
+            if not pedido:
+                return Response({'error': 'Pedido no encontrado'}, status=status.HTTP_404_NOT_FOUND)
+    
             # Eliminar el pedido
             pedido.delete()
-
-            return Response({'message': 'Pedido eliminado correctamente'}, status=status.HTTP_204_NO_CONTENT)
-        except Pedido.DoesNotExist:
-            return Response({'error': 'Pedido no encontrado'}, status=status.HTTP_404_NOT_FOUND)
+    
+            # Registrar la eliminación solo si el pedido fue eliminado
+            entregador = Entregador.objects.filter(documento=documento).first()
+            if entregador:
+                Registros_Pedidos.objects.create(
+                    documento=entregador,
+                    nombre_responsable=usuario,
+                    tipo_registro='Eliminacion',
+                    descripcion_registro=f'Pedido con ID {id_pedido} eliminado.'
+                )
+    
+            return Response({'message': 'Pedido eliminado correctamente'}, status=200)
         except Exception as e:
             return Response({'error': f'Ha ocurrido un error eliminando el pedido: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
+        
     @action(detail=False, methods=['GET'])
     def lista_entregadores(self, request):
         try:
@@ -163,8 +181,8 @@ class PedidosViews(viewsets.ModelViewSet):
             entregadores_con_pedidos = Pedido.objects.filter(fecha__date=hoy).values('documento').annotate(
                 completados=Count('id', filter=Q(completado=True)),
                 no_completados=Count('id', filter=Q(completado=False)),
-                total_rutas=Count('id', filter=Q(completado=False), distinct=True)  # Cuenta las rutas únicas por entregador
-            
+                total_rutas=Count('id', distinct=True),  # Cuenta las rutas únicas por entregador
+                 total_valor_pedido=Sum('valor_pedido')
             )
 
             # Obtiene los entregadores y añade las estadísticas de pedidos
@@ -180,6 +198,7 @@ class PedidosViews(viewsets.ModelViewSet):
                     'completados': stats['completados'],
                     'no_completados': stats['no_completados'],
                     'total_rutas': stats['total_rutas'],  # Añadir el total de rutas
+                    'total_valor': stats['total_valor_pedido'],  # Añadir el total de rutas
 
                 })
 
@@ -263,25 +282,18 @@ class PedidosViews(viewsets.ModelViewSet):
             documento = request.data.get('documento')
             if nuevo_dato ==False:
                 nuevo_dato='False'
-            print(id_pedido)
-            print(nuevo_dato)
-            print(campo)
             # Validar que se hayan proporcionado todos los datos necesarios
             if not id_pedido or not campo or not nuevo_dato:
                 return Response({'error': 'ID del pedido, campo y dato son requeridos.'}, status=status.HTTP_400_BAD_REQUEST)
-
             # Obtener el pedido a actualizar
             pedido = Pedido.objects.filter(id=id_pedido).first()
             if not pedido:
                 return Response({'error': 'Pedido no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
-
             # Obtener el dato antiguo antes de actualizar
             dato_viejo = getattr(pedido, campo)
-
             # Actualizar el campo dinámicamente
             setattr(pedido, campo, nuevo_dato)
             pedido.save()
-
             # Crear el registro solo si la actualización fue exitosa
             entregador = Entregador.objects.filter(documento=documento).first()
             if entregador:
@@ -291,9 +303,124 @@ class PedidosViews(viewsets.ModelViewSet):
                     tipo_registro='Actualizacion',
                     descripcion_registro=f'Se actualizó {campo}: dato viejo "{dato_viejo}", nuevo dato "{nuevo_dato}"'
                 )
-
             return Response({'success': f'{campo} actualizado correctamente.'}, status=status.HTTP_200_OK)
-
         except Exception as e:
             print("Error actualizando el pedido", str(e))
             return Response({'error': f'Se produjo un error al actualizar el pedido: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    @action(detail=False, methods=['PUT'])
+    def completar_ruta(self, request):
+        try:
+            # Extraer los datos del request
+            id_ruta = request.data.get('ruta')
+            usuario = request.data.get('usuario')
+            documento = request.data.get('documento')
+
+            # Validar que se hayan proporcionado todos los datos necesarios
+            if not id_ruta or not usuario or not documento:
+                return Response(
+                    {'error': 'Ruta, usuario y documento son requeridos.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Obtener la fecha actual
+            hoy = datetime.now().date()
+
+
+            # Filtrar los pedidos de hoy que coincidan con el número de ruta
+            pedidos_a_completar = Pedido.objects.filter(
+                fecha__date=hoy,
+                numero_ruta=id_ruta,
+                completado=False
+            )
+
+            if not pedidos_a_completar.exists():
+                return Response(
+                    {'error': 'No se encontraron pedidos para la ruta especificada en el día de hoy.'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # Actualizar el campo completado a True para todos los pedidos filtrados
+            pedidos_actualizados = pedidos_a_completar.update(completado=True)
+
+            # Crear registro de la operación
+            entregador = Entregador.objects.filter(documento=documento).first()
+            if entregador:
+                Registros_Pedidos.objects.create(
+                    documento=entregador,
+                    nombre_responsable=usuario,
+                    tipo_registro='Actualizacion',
+                    descripcion_registro=f'Se completaron {pedidos_actualizados} pedidos para la ruta "{id_ruta}" el {hoy}.'
+                )
+
+            return Response(
+                {'success': f'{pedidos_actualizados} pedidos completados correctamente.'},
+                status=status.HTTP_200_OK
+            )
+
+        except Exception as e:
+            print("Error actualizando los pedidos", str(e))
+            return Response(
+                {'error': f'Se produjo un error al completar los pedidos: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+
+    @action(detail=False, methods=['GET'])
+    def historico_entregadores(self, request):
+        try:
+            # Obtener el rango de fechas del request
+            fecha_inicio = request.query_params.get('fecha_inicio')
+            fecha_fin = request.query_params.get('fecha_fin')
+            fecha = request.query_params.get('fecha')
+            
+            hoy = datetime.now().date()
+            
+            # Determinar el rango de fechas
+            if fecha:
+                fecha_filtro = datetime.strptime(fecha, '%Y-%m-%d').date()
+                pedidos = Pedido.objects.filter(fecha__date=fecha_filtro)
+            elif fecha_inicio and fecha_fin:
+                fecha_inicio = datetime.strptime(fecha_inicio, '%Y-%m-%d').date()
+                fecha_fin = datetime.strptime(fecha_fin, '%Y-%m-%d').date()
+                pedidos = Pedido.objects.filter(fecha__date__range=[fecha_inicio, fecha_fin])
+            else:
+                primer_dia_mes = hoy.replace(day=1)
+                ultimo_dia_mes = (primer_dia_mes + timedelta(days=31)).replace(day=1) - timedelta(days=1)
+                pedidos = Pedido.objects.filter(fecha__date__range=[primer_dia_mes, ultimo_dia_mes])
+
+            # Filtrar y agrupar los pedidos por entregador
+            entregadores_con_pedidos = pedidos.values('documento').annotate(
+                total_pedidos=Count('id'),
+                mayoristas=Count('id', filter=Q(tipo_pedido='Mayorista')),
+                tiendas=Count('id', filter=Q(tipo_pedido='Tienda')),
+                acompanado=Count('id', filter=Q(acompanado=True)),
+                total_valor_pedido=Sum('valor_pedido'),
+                valor_mayoristas=Sum('valor_pedido', filter=Q(tipo_pedido='Mayorista')),
+                valor_tiendas=Sum('valor_pedido', filter=Q(tipo_pedido='Tienda')),
+            )
+            
+            # Obtener los entregadores y añadir las estadísticas de pedidos
+            documentos = [e['documento'] for e in entregadores_con_pedidos]
+            entregadores = Entregador.objects.filter(documento__in=documentos)
+            entregador_dict = {e.documento: e for e in entregadores}
+
+            data = []
+            for stats in entregadores_con_pedidos:
+                entregador = entregador_dict.get(stats['documento'])
+                if entregador:
+                    data.append({
+                        'documento': entregador.documento,
+                        'entregador': f"{entregador.nombres} {entregador.apellidos}",
+                        'total_pedidos': stats['total_pedidos'],
+                        'mayoristas': stats['mayoristas'],
+                        'tiendas': stats['tiendas'],
+                        'acompanado': stats['acompanado'],
+                        'total_valor': stats['total_valor_pedido'],
+                        'valor_mayoristas': stats['valor_mayoristas'],
+                        'valor_tiendas': stats['valor_tiendas'],
+                    })
+
+            return Response(data)
+        except Exception as e:
+            print("Error obteniendo el log", str(e))
+            return Response({'error': f'Se produjo un error al obtener los registros de entregadores: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
