@@ -7,7 +7,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework import status
 from datetime import datetime, timedelta, date
-from django.db import transaction
+from django.db import transaction, models
 from django.db.models import Count, Q,Sum
 from .serializers import Entregadores_Serializer, PedidoSerializer
 import json
@@ -72,6 +72,7 @@ class PedidosViews(viewsets.ModelViewSet):
                 usuario = request.POST.get('usuario')
                 acompañante = request.POST.get('Acompañante')
                 acompañado = request.POST.get('Acompañado')
+                agregar = request.POST.get('agregar')
 
                 # Intentar obtener y verificar los datos de pedidos
                 pedidos_json = request.POST.get('pedidos')
@@ -88,16 +89,17 @@ class PedidosViews(viewsets.ModelViewSet):
 
                 created_pedidos = []
                 fecha_actual = datetime.now()
-                   # Verificar si ya existe un pedido con el mismo número de ruta y entregador para la fecha actual
-                for pedido in pedidos_data:
-                 numero_ruta = pedido.get('numeroRuta', '')
-                 
-                 if Pedido.objects.filter(
-                    documento__documento=documento,
-                    numero_ruta=numero_ruta,
-                    fecha__date=fecha_actual
-                ).exists():
-                    return Response({'error': 'El número de ruta ya está asignado para hoy para este entregador'}, status=status.HTTP_400_BAD_REQUEST)
+                # Verificar si ya existe un pedido con el mismo número de ruta y entregador para la fecha actual
+                if  not agregar:
+                    for pedido in pedidos_data:
+                     numero_ruta = pedido.get('numeroRuta', '')
+                     
+                     if Pedido.objects.filter(
+                        documento__documento=documento,
+                        numero_ruta=numero_ruta,
+                        fecha__date=fecha_actual
+                    ).exists():
+                        return Response({'error': 'El número de ruta ya está asignado para hoy para este entregador'}, status=status.HTTP_400_BAD_REQUEST)
                 # Crear los pedidos uno a uno
                 for pedido in pedidos_data:
                     if not isinstance(pedido, dict):
@@ -280,20 +282,33 @@ class PedidosViews(viewsets.ModelViewSet):
             nuevo_dato = request.data.get('dato')
             usuario = request.data.get('usuario')
             documento = request.data.get('documento')
-            if nuevo_dato ==False:
-                nuevo_dato='False'
+
             # Validar que se hayan proporcionado todos los datos necesarios
-            if not id_pedido or not campo or not nuevo_dato:
+            if not id_pedido or not campo or nuevo_dato is None:
                 return Response({'error': 'ID del pedido, campo y dato son requeridos.'}, status=status.HTTP_400_BAD_REQUEST)
+
             # Obtener el pedido a actualizar
             pedido = Pedido.objects.filter(id=id_pedido).first()
             if not pedido:
                 return Response({'error': 'Pedido no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+
             # Obtener el dato antiguo antes de actualizar
             dato_viejo = getattr(pedido, campo)
+
+            # Convertir el nuevo dato al tipo adecuado
+            field = Pedido._meta.get_field(campo)
+            if isinstance(field, models.BooleanField):
+                nuevo_dato = nuevo_dato in ['True', 'true', True]
+            elif isinstance(field, models.DecimalField):
+                try:
+                    nuevo_dato = float(nuevo_dato)
+                except ValueError:
+                    return Response({'error': 'El valor proporcionado debe ser un número decimal.'}, status=status.HTTP_400_BAD_REQUEST)
+
             # Actualizar el campo dinámicamente
             setattr(pedido, campo, nuevo_dato)
             pedido.save()
+
             # Crear el registro solo si la actualización fue exitosa
             entregador = Entregador.objects.filter(documento=documento).first()
             if entregador:
@@ -303,48 +318,56 @@ class PedidosViews(viewsets.ModelViewSet):
                     tipo_registro='Actualizacion',
                     descripcion_registro=f'Se actualizó {campo}: dato viejo "{dato_viejo}", nuevo dato "{nuevo_dato}"'
                 )
+
             return Response({'success': f'{campo} actualizado correctamente.'}, status=status.HTTP_200_OK)
         except Exception as e:
             print("Error actualizando el pedido", str(e))
             return Response({'error': f'Se produjo un error al actualizar el pedido: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+   
     @action(detail=False, methods=['PUT'])
     def completar_ruta(self, request):
-        try:
-            # Extraer los datos del request
-            id_ruta = request.data.get('ruta')
-            usuario = request.data.get('usuario')
-            documento = request.data.get('documento')
+            try:
+                # Extraer los datos del request
+                id_ruta = request.data.get('ruta')
+                usuario = request.data.get('usuario')
+                documento = request.data.get('documento')
 
-            # Validar que se hayan proporcionado todos los datos necesarios
-            if not id_ruta or not usuario or not documento:
-                return Response(
-                    {'error': 'Ruta, usuario y documento son requeridos.'},
-                    status=status.HTTP_400_BAD_REQUEST
+                # Validar que se hayan proporcionado todos los datos necesarios
+                if not id_ruta or not usuario or not documento:
+                    return Response(
+                        {'error': 'Ruta, usuario y documento son requeridos.'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                # Obtener la fecha actual
+                hoy = datetime.now().date()
+
+                # Buscar el entregador por documento
+                entregador = Entregador.objects.filter(documento=documento).first()
+                if not entregador:
+                    return Response(
+                        {'error': 'No se encontró un entregador con el documento proporcionado.'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+
+                # Filtrar los pedidos de hoy que coincidan con el número de ruta y el entregador
+                pedidos_a_completar = Pedido.objects.filter(
+                    fecha__date=hoy,
+                    numero_ruta=id_ruta,
+                    completado=False,
+                    documento=entregador.documento  # Filtra también por documento del entregador
                 )
 
-            # Obtener la fecha actual
-            hoy = datetime.now().date()
+                if not pedidos_a_completar.exists():
+                    return Response(
+                        {'error': 'No se encontraron pedidos para la ruta especificada, entregador y el día de hoy.'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
 
+                # Actualizar el campo completado a True para todos los pedidos filtrados
+                pedidos_actualizados = pedidos_a_completar.update(completado=True)
 
-            # Filtrar los pedidos de hoy que coincidan con el número de ruta
-            pedidos_a_completar = Pedido.objects.filter(
-                fecha__date=hoy,
-                numero_ruta=id_ruta,
-                completado=False
-            )
-
-            if not pedidos_a_completar.exists():
-                return Response(
-                    {'error': 'No se encontraron pedidos para la ruta especificada en el día de hoy.'},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-
-            # Actualizar el campo completado a True para todos los pedidos filtrados
-            pedidos_actualizados = pedidos_a_completar.update(completado=True)
-
-            # Crear registro de la operación
-            entregador = Entregador.objects.filter(documento=documento).first()
-            if entregador:
+                # Crear registro de la operación
                 Registros_Pedidos.objects.create(
                     documento=entregador,
                     nombre_responsable=usuario,
@@ -352,18 +375,17 @@ class PedidosViews(viewsets.ModelViewSet):
                     descripcion_registro=f'Se completaron {pedidos_actualizados} pedidos para la ruta "{id_ruta}" el {hoy}.'
                 )
 
-            return Response(
-                {'success': f'{pedidos_actualizados} pedidos completados correctamente.'},
-                status=status.HTTP_200_OK
-            )
+                return Response(
+                    {'success': f'{pedidos_actualizados} pedidos completados correctamente.'},
+                    status=status.HTTP_200_OK
+                )
 
-        except Exception as e:
-            print("Error actualizando los pedidos", str(e))
-            return Response(
-                {'error': f'Se produjo un error al completar los pedidos: {str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-        
+            except Exception as e:
+                print("Error actualizando los pedidos", str(e))
+                return Response(
+                    {'error': f'Se produjo un error al completar los pedidos: {str(e)}'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
 
     @action(detail=False, methods=['GET'])
     def historico_entregadores(self, request):
