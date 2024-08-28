@@ -121,7 +121,7 @@ class PedidosViews(viewsets.ModelViewSet):
                                 fecha=fecha_actual,
                                 valor_transferencia =0,
                                 devolucion =0,
-
+                                efectivo=0,
                                 creador=usuario
                             )
                             created_pedidos.append(pedido_obj)
@@ -139,7 +139,6 @@ class PedidosViews(viewsets.ModelViewSet):
 
         return JsonResponse({'error': 'Método no permitido'}, status=405)
 
-   
     @action(detail=False, methods=['DELETE'])
     def eliminar_pedido(self, request):
         id_pedido = request.data.get('id')
@@ -257,7 +256,8 @@ class PedidosViews(viewsets.ModelViewSet):
                     'valor_transferencia': pedido.valor_transferencia,
                     'devolucion': pedido.devolucion,
                     'completado': pedido.completado,
-                    'creador': pedido.creador
+                    'creador': pedido.creador,
+                    'efectivo':pedido.efectivo
                 })
     
             # Construir la respuesta agrupada por número de ruta
@@ -282,7 +282,10 @@ class PedidosViews(viewsets.ModelViewSet):
             nuevo_dato = request.data.get('dato')
             usuario = request.data.get('usuario')
             documento = request.data.get('documento')
+            efectivo = request.data.get('efectivo')
+            numeroRuta = request.data.get('numeroRuta')
 
+            print(campo, documento, nuevo_dato, id_pedido)
             # Validar que se hayan proporcionado todos los datos necesarios
             if not id_pedido or not campo or nuevo_dato is None:
                 return Response({'error': 'ID del pedido, campo y dato son requeridos.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -291,6 +294,44 @@ class PedidosViews(viewsets.ModelViewSet):
             pedido = Pedido.objects.filter(id=id_pedido).first()
             if not pedido:
                 return Response({'error': 'Pedido no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+
+            # Verificar si el campo proporcionado existe en el modelo
+            if not hasattr(pedido, campo):
+                return Response({'error': f'Campo {campo} no válido.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Si efectivo es True y hay un numeroRuta, actualizar todos los pedidos de esa ruta
+            if efectivo and numeroRuta:
+                # Filtrar pedidos por ruta, documento del entregador y fecha de hoy
+                hoy = datetime.now()
+                pedidos_ruta = Pedido.objects.filter(
+                    numero_ruta=numeroRuta,
+                    documento=documento,
+                    fecha__date=hoy
+                )
+
+                # Contar el número de pedidos en la ruta
+                numero_pedidos = pedidos_ruta.count()
+                if numero_pedidos == 0:
+                    return Response({'error': 'No hay pedidos para esta ruta y entregador en el día de hoy.'}, status=status.HTTP_404_NOT_FOUND)
+
+                # Dividir el nuevo dato entre el número de pedidos
+                nuevo_valor = float(nuevo_dato) / numero_pedidos
+
+                # Actualizar cada pedido con el valor dividido
+                pedidos_ruta.update(**{campo: nuevo_valor})
+
+                # Crear registros para cada pedido actualizado
+                entregador = Entregador.objects.filter(documento=documento).first()
+                if entregador:
+                    for pedido in pedidos_ruta:
+                        Registros_Pedidos.objects.create(
+                            documento=entregador,
+                            nombre_responsable=usuario,
+                            tipo_registro='Actualizacion',
+                            descripcion_registro=f'Se actualizó {campo} en pedido {pedido.id}: nuevo dato "{nuevo_valor}"'
+                        )
+
+                return Response({'success': f'Todos los pedidos en la ruta {numeroRuta} actualizados correctamente.'}, status=status.HTTP_200_OK)
 
             # Obtener el dato antiguo antes de actualizar
             dato_viejo = getattr(pedido, campo)
@@ -305,7 +346,7 @@ class PedidosViews(viewsets.ModelViewSet):
                 except ValueError:
                     return Response({'error': 'El valor proporcionado debe ser un número decimal.'}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Actualizar el campo dinámicamente
+            # Actualizar el campo dinámicamente para un solo pedido
             setattr(pedido, campo, nuevo_dato)
             pedido.save()
 
@@ -320,10 +361,9 @@ class PedidosViews(viewsets.ModelViewSet):
                 )
 
             return Response({'success': f'{campo} actualizado correctamente.'}, status=status.HTTP_200_OK)
+
         except Exception as e:
-            print("Error actualizando el pedido", str(e))
-            return Response({'error': f'Se produjo un error al actualizar el pedido: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-   
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)   
     @action(detail=False, methods=['PUT'])
     def completar_ruta(self, request):
             try:

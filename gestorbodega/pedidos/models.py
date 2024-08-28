@@ -40,6 +40,7 @@ class Pedido(models.Model):
     acompanante = models.CharField(max_length=100, blank=True, null=True)
     fecha = models.DateTimeField(auto_now_add=True)
     valor_transferencia = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True)
+    efectivo = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True)
     devolucion = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True)
     completado = models.BooleanField(default=False)
     creador = models.CharField(max_length=50)
