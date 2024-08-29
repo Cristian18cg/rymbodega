@@ -73,7 +73,6 @@ class PedidosViews(viewsets.ModelViewSet):
                 acompañante = request.POST.get('Acompañante')
                 acompañado = request.POST.get('Acompañado')
                 agregar = request.POST.get('agregar')
-
                 # Intentar obtener y verificar los datos de pedidos
                 pedidos_json = request.POST.get('pedidos')
                 if not pedidos_json:
@@ -90,7 +89,8 @@ class PedidosViews(viewsets.ModelViewSet):
                 created_pedidos = []
                 fecha_actual = datetime.now()
                 # Verificar si ya existe un pedido con el mismo número de ruta y entregador para la fecha actual
-                if  not agregar:
+                if agregar == 'false'  :
+                    print("Entrar")
                     for pedido in pedidos_data:
                      numero_ruta = pedido.get('numeroRuta', '')
                      
@@ -108,6 +108,7 @@ class PedidosViews(viewsets.ModelViewSet):
                     try:
                         entregador = Entregador.objects.filter(documento=documento).first()
                         if entregador :
+                            print('base',pedido.get('base', '0'))
                             pedido_obj = Pedido.objects.create(
                                 documento=entregador,
                                 nombre_entregador=nombres,
@@ -122,6 +123,7 @@ class PedidosViews(viewsets.ModelViewSet):
                                 valor_transferencia =0,
                                 devolucion =0,
                                 efectivo=0,
+                                base=pedido.get('base', ''),
                                 creador=usuario
                             )
                             created_pedidos.append(pedido_obj)
@@ -181,6 +183,7 @@ class PedidosViews(viewsets.ModelViewSet):
             # Filtra los pedidos por la fecha de hoy y agrupa por entregador
             entregadores_con_pedidos = Pedido.objects.filter(fecha__date=hoy).values('documento').annotate(
                 completados=Count('id', filter=Q(completado=True)),
+                creditos=Count('id', filter=Q(credito=True)),
                 no_completados=Count('id', filter=Q(completado=False)),
                 total_rutas=Count('id', distinct=True),  # Cuenta las rutas únicas por entregador
                  total_valor_pedido=Sum('valor_pedido')
@@ -200,6 +203,7 @@ class PedidosViews(viewsets.ModelViewSet):
                     'no_completados': stats['no_completados'],
                     'total_rutas': stats['total_rutas'],  # Añadir el total de rutas
                     'total_valor': stats['total_valor_pedido'],  # Añadir el total de rutas
+                    'creditos': stats['creditos'],
 
                 })
 
@@ -257,7 +261,9 @@ class PedidosViews(viewsets.ModelViewSet):
                     'devolucion': pedido.devolucion,
                     'completado': pedido.completado,
                     'creador': pedido.creador,
-                    'efectivo':pedido.efectivo
+                    'efectivo':pedido.efectivo,
+                    'credito': pedido.credito,
+                    'base': pedido.base,
                 })
     
             # Construir la respuesta agrupada por número de ruta
@@ -265,13 +271,44 @@ class PedidosViews(viewsets.ModelViewSet):
             for ruta, pedidos_lista in rutas_agrupadas.items():
                 data.append({
                     'numero_ruta': ruta,
-                    'pedidos': pedidos_lista
+                    'pedidos': pedidos_lista,
                 })
     
             return Response(data)
         except Exception as e:
             print("Error obteniendo los pedidos", str(e))
             return Response({'error': f'Se produjo un error al obtener los pedidos: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+         
+    @action(detail=False, methods=['GET'])
+    def obtener_ruta(self, request):
+        try:
+            # Obtener el documento del entregador desde los parámetros de la solicitud
+            documento = request.query_params.get('documento', None)
+            if not documento:
+                return Response({'error': 'El parámetro "documento" es requerido'}, status=status.HTTP_400_BAD_REQUEST)
+    
+            # Verificar si el entregador existe
+            entregador = Entregador.objects.filter(documento=documento).first()
+            if not entregador:
+                return Response({'error': 'Entregador no encontrado'}, status=status.HTTP_404_NOT_FOUND)
+    
+            # Obtiene la fecha de hoy
+            hoy = datetime.now().date()
+    
+            # Obtener el último pedido del día de hoy para el entregador, ordenado por número de ruta en orden descendente
+            ultimo_pedido = Pedido.objects.filter(documento=entregador.documento, fecha__date=hoy).order_by('-numero_ruta').first()
+            # Si no hay pedidos para el día de hoy, devolver 1
+            if not ultimo_pedido:
+                return Response({'numero_ruta': 0}, status=status.HTTP_200_OK)
+            ultima_base = ultimo_pedido.base         
+            # Extraer el número de la última ruta del pedido encontrado
+            ultima_ruta = ultimo_pedido.numero_ruta
+    
+            return Response({'numero_ruta': ultima_ruta, 'base':ultima_base}, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            print("Error obteniendo la última ruta:", str(e))
+            return Response({'error': 'Ocurrió un error al obtener la última ruta'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
          
     @action(detail=False, methods=['PUT'])
     def actualizar_pedido(self, request):

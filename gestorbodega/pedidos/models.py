@@ -44,7 +44,8 @@ class Pedido(models.Model):
     devolucion = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True)
     completado = models.BooleanField(default=False)
     creador = models.CharField(max_length=50)
-
+    base = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True)
+    credito = models.BooleanField(default=False)
     def __str__(self):
         return f"Pedido {self.id} - {self.numero_factura}"
 
