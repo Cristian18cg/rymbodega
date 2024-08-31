@@ -123,7 +123,7 @@ class PedidosViews(viewsets.ModelViewSet):
                                 valor_transferencia =0,
                                 devolucion =0,
                                 efectivo=0,
-                                base=pedido.get('base', ''),
+                                base=pedido.get('base', 0),
                                 creador=usuario
                             )
                             created_pedidos.append(pedido_obj)
