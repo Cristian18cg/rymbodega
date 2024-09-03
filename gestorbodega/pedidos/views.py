@@ -90,7 +90,6 @@ class PedidosViews(viewsets.ModelViewSet):
                 fecha_actual = datetime.now()
                 # Verificar si ya existe un pedido con el mismo número de ruta y entregador para la fecha actual
                 if agregar == 'false'  :
-                    print("Entrar")
                     for pedido in pedidos_data:
                      numero_ruta = pedido.get('numeroRuta', '')
                      
@@ -108,7 +107,6 @@ class PedidosViews(viewsets.ModelViewSet):
                     try:
                         entregador = Entregador.objects.filter(documento=documento).first()
                         if entregador :
-                            print('base',pedido.get('base', '0'))
                             pedido_obj = Pedido.objects.create(
                                 documento=entregador,
                                 nombre_entregador=nombres,
@@ -338,19 +336,34 @@ class PedidosViews(viewsets.ModelViewSet):
 
             # Si efectivo es True y hay un numeroRuta, actualizar todos los pedidos de esa ruta
             if efectivo and numeroRuta:
-                # Filtrar pedidos por ruta, documento del entregador y fecha de hoy
                 hoy = datetime.now()
                 pedidos_ruta = Pedido.objects.filter(
                     numero_ruta=numeroRuta,
                     documento=documento,
                     fecha__date=hoy
                 )
-
-                # Contar el número de pedidos en la ruta
                 numero_pedidos = pedidos_ruta.count()
                 if numero_pedidos == 0:
-                    return Response({'error': 'No hay pedidos para esta ruta y entregador en el día de hoy.'}, status=status.HTTP_404_NOT_FOUND)
+                        return Response({'error': 'No hay pedidos para esta ruta y entregador en el día de hoy.'}, status=status.HTTP_404_NOT_FOUND)
 
+                 # Si 'efectivo' es True y 'campo' es 'base', actualizar todos los pedidos de esa ruta
+                if campo == 'base' :
+                    # Contar el número de pedidos en la ruta
+                   
+                    # Actualizar cada pedido con el valor dividido en el campo 'base'
+                    pedidos_ruta.update(base=nuevo_dato)
+                    # Crear registros para cada pedido actualizado
+                    entregador = Entregador.objects.filter(documento=documento).first()
+                    if entregador:
+                        for pedido in pedidos_ruta:
+                            Registros_Pedidos.objects.create(
+                                documento=entregador,
+                                nombre_responsable=usuario,
+                                tipo_registro='Actualizacion',
+                                descripcion_registro=f'Se actualizó el campo base en pedido {pedido.id}: nuevo dato "{nuevo_dato}"'
+                            )
+
+                    return Response({'success': f'La base de la ruta {numeroRuta} fue actualizada correctamente.'}, status=status.HTTP_200_OK)
                 # Dividir el nuevo dato entre el número de pedidos
                 nuevo_valor = float(nuevo_dato) / numero_pedidos
 
@@ -478,14 +491,17 @@ class PedidosViews(viewsets.ModelViewSet):
             if fecha:
                 fecha_filtro = datetime.strptime(fecha, '%Y-%m-%d').date()
                 pedidos = Pedido.objects.filter(fecha__date=fecha_filtro)
+                rango_fechas = {'fecha_inicio': fecha_filtro, 'fecha_fin': fecha_filtro}
             elif fecha_inicio and fecha_fin:
                 fecha_inicio = datetime.strptime(fecha_inicio, '%Y-%m-%d').date()
                 fecha_fin = datetime.strptime(fecha_fin, '%Y-%m-%d').date()
                 pedidos = Pedido.objects.filter(fecha__date__range=[fecha_inicio, fecha_fin])
+                rango_fechas = {'fecha_inicio': fecha_inicio, 'fecha_fin': fecha_fin}
             else:
                 primer_dia_mes = hoy.replace(day=1)
                 ultimo_dia_mes = (primer_dia_mes + timedelta(days=31)).replace(day=1) - timedelta(days=1)
                 pedidos = Pedido.objects.filter(fecha__date__range=[primer_dia_mes, ultimo_dia_mes])
+                rango_fechas = {'fecha_inicio': primer_dia_mes, 'fecha_fin': ultimo_dia_mes}
 
             # Filtrar y agrupar los pedidos por entregador
             entregadores_con_pedidos = pedidos.values('documento').annotate(
@@ -519,7 +535,12 @@ class PedidosViews(viewsets.ModelViewSet):
                         'valor_tiendas': stats['valor_tiendas'],
                     })
 
-            return Response(data)
+ # Incluir el rango de fechas en la respuesta
+            response_data = {
+            'rango_fechas': rango_fechas,
+            'data': data
+        }
+            return Response(response_data)
         except Exception as e:
             print("Error obteniendo el log", str(e))
             return Response({'error': f'Se produjo un error al obtener los registros de entregadores: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
