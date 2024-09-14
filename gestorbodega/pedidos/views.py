@@ -9,6 +9,7 @@ from rest_framework import status
 from datetime import datetime, timedelta, date
 from django.db import transaction, models
 from django.db.models import Count, Q,Sum
+from django.db.models.functions import TruncDate
 from .serializers import Entregadores_Serializer, PedidoSerializer
 import json
 
@@ -181,10 +182,12 @@ class PedidosViews(viewsets.ModelViewSet):
             # Filtra los pedidos por la fecha de hoy y agrupa por entregador
             entregadores_con_pedidos = Pedido.objects.filter(fecha__date=hoy).values('documento').annotate(
                 completados=Count('id', filter=Q(completado=True)),
-                creditos=Count('id', filter=Q(credito=True)),
                 no_completados=Count('id', filter=Q(completado=False)),
+                creditos=Count('id', filter=Q(credito=True)),
                 total_rutas=Count('id', distinct=True),  # Cuenta las rutas únicas por entregador
-                 total_valor_pedido=Sum('valor_pedido')
+                total_valor_pedido=Sum('valor_pedido'),
+                total_valor_creditos=Sum('valor_pedido', filter=Q(credito=True) & Q(completado=False)),  # Suma del valor de los pedidos con crédito
+                total_valor_no_completados=Sum('valor_pedido', filter=Q(credito=False) & Q(completado=False))  # Suma del valor de los pedidos no completados
             )
 
             # Obtiene los entregadores y añade las estadísticas de pedidos
@@ -195,14 +198,16 @@ class PedidosViews(viewsets.ModelViewSet):
                 stats = next((e for e in entregadores_con_pedidos if e['documento'] == entregador.documento), None)
                 
                 data.append({
-                    'documento':entregador.documento,
+                    'documento': entregador.documento,
                     'entregador': f"{entregador.nombres} {entregador.apellidos}",
                     'completados': stats['completados'],
                     'no_completados': stats['no_completados'],
                     'total_rutas': stats['total_rutas'],  # Añadir el total de rutas
-                    'total_valor': stats['total_valor_pedido'],  # Añadir el total de rutas
+                    'total_valor': stats['total_valor_pedido'],  # Añadir el total de valor de pedidos
+                    'total_valor_creditos': stats['total_valor_creditos'],  # Añadir el total de valor de créditos
+                    'total_valor_no_completados': stats['total_valor_no_completados'],  # Añadir el total del valor de no completados
+                    'total_valor_creditos': stats['total_valor_creditos'],  # Añadir el total del valor de no completados
                     'creditos': stats['creditos'],
-
                 })
 
             return Response(data)
@@ -292,16 +297,16 @@ class PedidosViews(viewsets.ModelViewSet):
     
             # Obtiene la fecha de hoy
             hoy = datetime.now().date()
-    
+            
             # Obtener el último pedido del día de hoy para el entregador, ordenado por número de ruta en orden descendente
-            ultimo_pedido = Pedido.objects.filter(documento=entregador.documento, fecha__date=hoy).order_by('-numero_ruta').first()
+            ultimo_pedido = Pedido.objects.filter(documento=entregador.documento, fecha__date=hoy).order_by('-id').first()
             # Si no hay pedidos para el día de hoy, devolver 1
             if not ultimo_pedido:
                 return Response({'numero_ruta': 0}, status=status.HTTP_200_OK)
             ultima_base = ultimo_pedido.base         
             # Extraer el número de la última ruta del pedido encontrado
             ultima_ruta = ultimo_pedido.numero_ruta
-    
+            print(ultima_ruta)
             return Response({'numero_ruta': ultima_ruta, 'base':ultima_base}, status=status.HTTP_200_OK)
 
         except Exception as e:
@@ -414,6 +419,7 @@ class PedidosViews(viewsets.ModelViewSet):
 
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)   
+    
     @action(detail=False, methods=['PUT'])
     def completar_ruta(self, request):
             try:
@@ -544,3 +550,46 @@ class PedidosViews(viewsets.ModelViewSet):
         except Exception as e:
             print("Error obteniendo el log", str(e))
             return Response({'error': f'Se produjo un error al obtener los registros de entregadores: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    @action(detail=False, methods=['GET'])
+    def estadisticas_pedidos(self, request):
+        try:
+            # Obtener la fecha actual y el primer día del mes
+            hoy = datetime.now()
+            primer_dia_mes = hoy.replace(day=1)
+
+            # Agrupar los pedidos por fecha (día) en el mes actual y sumar el valor de los pedidos por día
+            pedidos_por_dia = Pedido.objects.filter(fecha__date__gte=primer_dia_mes, fecha__date__lte=hoy) \
+                .annotate(dia=TruncDate('fecha')) \
+                .values('dia') \
+                .annotate(total_pedido_dia=Sum('valor_pedido')) \
+                .order_by('dia')
+
+            # Obtener el top de pedidos por entregador en el mes actual
+            top_pedidos_entregador = Pedido.objects.filter(fecha__date__gte=primer_dia_mes, fecha__date__lte=hoy) \
+                .values('documento__nombres') \
+                .annotate(total=Count('id')) \
+                .order_by('-total')[:5]
+
+            # Valor total de pedidos mayoristas en el mes actual
+            total_mayoristas_mes = Pedido.objects.filter(tipo_pedido='Mayorista', fecha__date__gte=primer_dia_mes, fecha__date__lte=hoy) \
+                .aggregate(Sum('valor_pedido'))['valor_pedido__sum'] or 0
+
+            # Valor total de pedidos tienda en el mes actual
+            total_tienda_mes = Pedido.objects.filter(tipo_pedido='Tienda', fecha__date__gte=primer_dia_mes, fecha__date__lte=hoy) \
+                .aggregate(Sum('valor_pedido'))['valor_pedido__sum'] or 0
+
+            # Convertir los resultados de pedidos por día en un formato adecuado para graficar
+            pedidos_dia = [{'fecha': p['dia'], 'total': p['total_pedido_dia']} for p in pedidos_por_dia]
+
+            # Construir la respuesta
+            response_data = {
+                'pedidos_por_dia': pedidos_dia,
+                'top_pedidos_entregador': list(top_pedidos_entregador),
+                'total_mayoristas_mes': total_mayoristas_mes,
+                'total_tienda_mes': total_tienda_mes,
+            }
+
+            return Response(response_data, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
